@@ -11,11 +11,30 @@ const FONTS = [
   {id:'mincho',   label:'明朝（Noto Serif JP）', css:'"Noto Serif JP","Yu Mincho","Hiragino Mincho ProN",serif'},
   {id:'shippori', label:'明朝（しっぽり明朝）',   css:'"Shippori Mincho","Yu Mincho",serif'},
   {id:'brush',    label:'毛筆（Yuji Syuku）',     css:'"Yuji Syuku","Yu Mincho",serif'},
+  // 行書：端末に入っている行書体を使う（Microsoft Office 付属の HG行書体 など）。無い端末では毛筆で代用
+  {id:'gyosho',   label:'行書（HG行書体）', local:['HG行書体','HGGyoshotai','HGP行書体','HGPGyoshotai','HGS行書体','HGSGyoshotai'],
+                  css:'"HG行書体","HGGyoshotai","HGP行書体","HGPGyoshotai","HGS行書体","HGSGyoshotai","Yuji Syuku",serif'},
+  {id:'gyosho2',  label:'行書（その他の端末の行書体）', local:['DF行書体','DFGyoSho-W5','DFP行書体','AR行書体M','AR行書体B','ＤＦ行書体','ＤＦＰ行書体'],
+                  css:'"DF行書体","ＤＦ行書体","DFGyoSho-W5","DFP行書体","ＤＦＰ行書体","AR行書体M","AR行書体B","Yuji Syuku",serif'},
   {id:'gothic',   label:'ゴシック（Noto Sans JP）',css:'"Noto Sans JP","Hiragino Sans",sans-serif'},
   {id:'sysmin',   label:'端末の明朝',             css:'"Yu Mincho","YuMincho","Hiragino Mincho ProN","MS PMincho",serif'},
   {id:'sysgo',    label:'端末のゴシック',         css:'"Hiragino Sans","Yu Gothic",Meiryo,sans-serif'},
 ];
 const fontCss = id => (FONTS.find(f=>f.id===id)||FONTS[0]).css;
+const fontDef = id => FONTS.find(f=>f.id===id) || FONTS[0];
+
+/** 端末に入っている書体かを、文字幅の違いで調べる（見つかった名前を返す） */
+function findLocalFont(names){
+  const c=document.createElement('canvas').getContext('2d');
+  const txt='賞状永和優秀あいうえおABC';
+  for(const base of ['monospace','serif']){
+    c.font=`72px ${base}`; const w0=c.measureText(txt).width;
+    for(const n of names){ c.font=`72px "${n}", ${base}`; if(Math.abs(c.measureText(txt).width-w0)>0.5) return n; }
+  }
+  return null;
+}
+FONTS.forEach(f=>{ if(f.local) f.found = findLocalFont(f.local); });
+const fontMissing = id => { const f=fontDef(id); return !!f.local && !f.found; };
 
 const PAPERS = [
   {id:'A4', label:'A4（210×297）', w:210, h:297},
@@ -761,6 +780,7 @@ function syncElUI(){
   $('#elName').value=el.name; $('#elText').value=el.text;
   $('#elX').value=el.x; $('#elY').value=el.y; $('#elSize').value=el.size;
   $('#elFont').value=el.font; $('#elWeight').value=String(el.weight);
+  paintFontNote(el);
   $('#elLs').value=el.ls; $('#elLh').value=el.lh; $('#elMaxW').value=el.maxW;
   $('#elAlign').value=el.align; $('#elFit').value=el.fit; $('#elVert').value=el.vert?'1':'0';
   $('#elColor').value=el.color; $('#elEnabled').checked=el.on;
@@ -794,7 +814,65 @@ bindEl('#elLs','ls',num); bindEl('#elLh','lh',v=>Math.max(1,num(v))); bindEl('#e
 bindEl('#elAlign','align'); bindEl('#elFit','fit');
 bindEl('#elVert','vert', v=> v==='1'); bindEl('#elColor','color');
 
-$('#elFont').innerHTML = FONTS.map(f=>`<option value="${f.id}">${f.label}</option>`).join('');
+function paintFontOptions(){
+  const opt = f => `<option value="${esc(f.id)}">${esc(f.label)}${f.local && !f.found ? '（この端末になし）' : ''}</option>`;
+  const base = FONTS.filter(f=>!f.user), user = FONTS.filter(f=>f.user);
+  $('#elFont').innerHTML = base.map(opt).join('') +
+    (user.length ? `<optgroup label="読み込んだ書体">${user.map(opt).join('')}</optgroup>` : '');
+  const el = S.elements.find(x=>x.id===selEl); if(el) $('#elFont').value = el.font;
+}
+paintFontOptions();
+
+/* ---- 書体ファイルの読み込み（このブラウザに保存） ---- */
+async function registerFont(rec){
+  const ff = new FontFace(rec.family, rec.data.slice(0));
+  await ff.load(); document.fonts.add(ff);
+  const i = FONTS.findIndex(f=>f.id===rec.id);
+  const def = {id:rec.id, label:rec.name, css:`"${rec.family}","Yuji Syuku",serif`, user:true};
+  if(i>=0) FONTS[i]=def; else FONTS.push(def);
+}
+async function loadUserFonts(){
+  let list=[]; try{ list = (await IDB.get('fonts'))||[]; }catch(e){}
+  for(const r of list){ try{ await registerFont(r); }catch(e){} }
+}
+$('#addFont').onclick = ()=> $('#fontInput').click();
+$('#fontInput').onchange = async e=>{
+  const f=e.target.files[0]; e.target.value=''; if(!f) return;
+  const name = f.name.replace(/\.(ttf|otf|woff2?)$/i,'');
+  // 同じファイル名なら同じIDにする（別のパソコンで読み込み直しても設定がつながる）
+  const id = 'user:'+name;
+  const rec = {id, name, family:'ShojoUser_'+Array.from(name).map(c=>c.codePointAt(0).toString(36)).join('').slice(0,40), data:await f.arrayBuffer()};
+  try{ await registerFont(rec); }
+  catch(err){ toast('この書体ファイルは読み込めませんでした。TTF・OTF・WOFF 形式のファイルを選んでください。','err'); return; }
+  let stored=true;
+  try{ const list=((await IDB.get('fonts'))||[]).filter(r=>r.id!==id); list.push(rec); await IDB.set('fonts',list); }catch(err){ stored=false; }
+  const el=S.elements.find(x=>x.id===selEl); if(el){ el.font=id; el.weight=400; }
+  paintFontOptions(); syncElUI(); requestRender(); saveSession();
+  toast(stored ? `書体「${name}」を読み込みました。` : `書体「${name}」を読み込みましたが、このブラウザに保存できませんでした。次回は読み込み直してください。`, stored?'':'err');
+};
+$('#removeFont').onclick = async ()=>{
+  const el=S.elements.find(x=>x.id===selEl); if(!el || !String(el.font).startsWith('user:')) return;
+  const id=el.font, name=fontDef(id).label;
+  try{ const list=((await IDB.get('fonts'))||[]).filter(r=>r.id!==id); await IDB.set('fonts',list); }catch(e){}
+  const i=FONTS.findIndex(f=>f.id===id); if(i>=0) FONTS.splice(i,1);
+  S.elements.forEach(x=>{ if(x.font===id) x.font='mincho'; });
+  paintFontOptions(); syncElUI(); requestRender(); saveSession();
+  toast(`書体「${name}」を外しました。この書体を使っていた項目は明朝に戻しています。`);
+};
+function paintFontNote(el){
+  const note=$('#fontNote'), f=fontDef(el.font);
+  $('#removeFont').hidden = !f.user;
+  let msg='';
+  if(String(el.font).startsWith('user:') && !f.user) msg='この設定で使っていた書体ファイル「'+el.font.slice(5)+'」がこのブラウザにありません。「書体ファイルを読み込む」から同じファイルを読み込んでください。それまでは明朝で表示します。';
+  else if(fontMissing(el.font)) msg='この端末には'+(el.font==='gyosho'?'HG行書体':'対応する行書体')+'が入っていないため、毛筆（Yuji Syuku）で代わりに表示しています。Microsoft Office が入った Windows パソコンには、通常 HG行書体 が入っています。お手持ちの行書体ファイルがあれば「書体ファイルを読み込む」からも使えます。';
+  else if(f.user) msg='読み込んだ書体は、このブラウザにだけ保存されます。設定を別のパソコンで開くときは、同じ書体ファイルを読み込み直してください。';
+  note.textContent=msg; note.hidden=!msg;
+}
+$('#elFont').addEventListener('change', ()=>{
+  const el=S.elements.find(x=>x.id===selEl); if(!el) return;
+  if(fontDef(el.font).local && (el.weight>=700)) { el.weight=400; $('#elWeight').value='400'; requestRender(); saveSession(); }
+  paintFontNote(el);
+});
 $('#paperPreset').innerHTML = PAPERS.map(p=>`<option value="${p.id}">${p.label}</option>`).join('');
 {
   const groups=[...new Set(QUICK_ADD.map(q=>q.g))];
@@ -885,6 +963,8 @@ async function makePdf(records, opts={}){
     setStatus(m,'err'); toast(m,'err'); return;
   }
   if(S.mode==='full' && !bgImage && !opts.guide){ toast('台紙の画像がないため、追加した項目だけを出力します。','err'); }
+  const missing = S.elements.filter(el=>el.on && (fontMissing(el.font) || (String(el.font).startsWith('user:') && !fontDef(el.font).user)));
+  if(missing.length) toast(`「${missing.map(e=>e.name).join('」「')}」の書体がこの端末にないため、代わりの書体で出力します。`,'err');
   const {jsPDF} = window.jspdf;
   const W=S.paper.w, H=S.paper.h;
   const ppm = (+S.dpi)/25.4;
@@ -1100,6 +1180,8 @@ $$('.next').forEach(b=> b.onclick=()=>goTab(b.dataset.go));
    ============================================================ */
 (async function init(){
   setupSteppers();
+  await loadUserFonts();
+  paintFontOptions();
   const saved = await loadSession();
   applySettings(saved && saved.version===2 ? saved : defaultSettings());
   try{ await document.fonts.ready; }catch(e){}
