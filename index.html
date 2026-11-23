@@ -220,6 +220,12 @@
                 <select id="elWeight"><option value="400">標準</option><option value="500">中</option><option value="700">太字</option><option value="900">極太</option></select>
               </label>
             </div>
+            <div class="row wrap" style="margin-top:4px">
+              <button type="button" class="tiny ghost" id="addFont">書体ファイルを読み込む</button>
+              <button type="button" class="tiny ghost" id="removeFont" hidden>この書体を外す</button>
+            </div>
+            <input type="file" id="fontInput" accept=".ttf,.otf,.woff,.woff2" hidden>
+            <div class="hint" id="fontNote" hidden></div>
             <div class="grid3" style="margin-top:8px">
               <label><span class="fieldlabel">大きさ（pt）</span><input type="number" id="elSize" step="0.5" min="4"></label>
               <label><span class="fieldlabel">字間（字送り比）</span><input type="number" id="elLs" step="0.05"></label>
